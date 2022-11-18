@@ -1,8 +1,3 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
-#
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
-
 import itertools
 import logging
 import os
@@ -51,7 +46,7 @@ def load_label(label_path, inds, tot):
     with open(label_path) as f:
         labels = [line.rstrip() for line in f]
         assert (
-            len(labels) == tot
+                len(labels) == tot
         ), f"number of labels does not match ({len(labels)} != {tot})"
         labels = [labels[i] for i in inds]
     return labels
@@ -61,7 +56,7 @@ def load_label_offset(label_path, inds, tot):
     with open(label_path) as f:
         code_lengths = [len(line.encode("utf-8")) for line in f]
         assert (
-            len(code_lengths) == tot
+                len(code_lengths) == tot
         ), f"number of labels does not match ({len(code_lengths)} != {tot})"
         offsets = list(itertools.accumulate([0] + code_lengths))
         offsets = [(offsets[i], offsets[i + 1]) for i in inds]
@@ -69,13 +64,13 @@ def load_label_offset(label_path, inds, tot):
 
 
 def verify_label_lengths(
-    audio_sizes,
-    audio_rate,
-    label_path,
-    label_rate,
-    inds,
-    tot,
-    tol=0.1,  # tolerance in seconds
+        audio_sizes,
+        audio_rate,
+        label_path,
+        label_rate,
+        inds,
+        tot,
+        tol=0.1,  # tolerance in seconds
 ):
     if label_rate < 0:
         logger.info(f"{label_path} is sequence label. skipped")
@@ -94,7 +89,7 @@ def verify_label_lengths(
                 (
                     f"audio and label duration differ too much "
                     f"(|{dur_from_audio} - {dur_from_label}| > {tol}) "
-                    f"in line {ind+1} of {label_path}. Check if `label_rate` "
+                    f"in line {ind + 1} of {label_path}. Check if `label_rate` "
                     f"is correctly set (currently {label_rate}). "
                     f"num. of samples = {audio_sizes[i]}; "
                     f"label length = {lengths[i]}"
@@ -107,29 +102,30 @@ def verify_label_lengths(
         )
 
 
-class HubertDataset(FairseqDataset):
+class CodeDataset(FairseqDataset):
     def __init__(
-        self,
-        manifest_path: str,
-        sample_rate: float,
-        label_paths: List[str],
-        label_rates: Union[List[float], float],  # -1 for sequence labels
-        pad_list: List[str],
-        eos_list: List[str],
-        label_processors: Optional[List[Any]] = None,
-        max_keep_sample_size: Optional[int] = None,
-        min_keep_sample_size: Optional[int] = None,
-        max_sample_size: Optional[int] = None,
-        shuffle: bool = True,
-        pad_audio: bool = False,
-        normalize: bool = False,
-        store_labels: bool = True,
-        random_crop: bool = False,
-        single_target: bool = False,
-        code_input: bool = False,
-        code_paths: List[str] = None,
-        code_processors: Optional[List[Any]] = None,
-        code_rate: Optional[float] = None,
+            self,
+            manifest_path: str,
+            sample_rate: float,
+            label_paths: List[str],
+            label_rates: Union[List[float], float],  # -1 for sequence labels
+            pad_list: List[str],
+            eos_list: List[str],
+            fine_tuning: bool = False,
+            label_processors: Optional[List[Any]] = None,
+            max_keep_sample_size: Optional[int] = None,
+            min_keep_sample_size: Optional[int] = None,
+            max_sample_size: Optional[int] = None,
+            shuffle: bool = True,
+            pad_audio: bool = False,
+            normalize: bool = False,
+            store_labels: bool = True,
+            random_crop: bool = False,
+            single_target: bool = False,
+            code_input: bool = False,
+            code_paths: List[str] = None,
+            code_processors: Optional[List[Any]] = None,
+            code_rate: Optional[float] = None,
     ):
         self.audio_root, self.audio_names, inds, tot, self.sizes = load_audio(
             manifest_path, max_keep_sample_size, min_keep_sample_size
@@ -141,8 +137,11 @@ class HubertDataset(FairseqDataset):
         self.num_labels = len(label_paths)
         self.pad_list = pad_list
         self.eos_list = eos_list
+        self.fine_tuning = fine_tuning
         self.label_processors = label_processors
         self.single_target = single_target
+        assert self.single_target, "Not supported multiple single target yet."
+
         self.label_rates = (
             [label_rates for _ in range(len(label_paths))]
             if isinstance(label_rates, float)
@@ -161,6 +160,8 @@ class HubertDataset(FairseqDataset):
             verify_label_lengths(
                 self.sizes, sample_rate, label_path, label_rate, inds, tot
             )
+
+        self.code_paths = None
         if code_paths is not None:
             self.code_paths = code_paths
             if store_labels:
@@ -174,8 +175,6 @@ class HubertDataset(FairseqDataset):
             verify_label_lengths(
                 self.sizes, sample_rate, code_paths[0], code_rate, inds, tot
             )
-        else:
-            self.code_paths = None
 
         self.max_sample_size = (
             max_sample_size if max_sample_size is not None else sys.maxsize
@@ -185,8 +184,8 @@ class HubertDataset(FairseqDataset):
         self.code_input = code_input
         logger.info(
             f"pad_audio={pad_audio}, random_crop={random_crop}, "
-            f"normalize={normalize}, max_sample_size={self.max_sample_size}"
-            f" code_input={self.code_input}"
+            f"normalize={normalize}, max_sample_size={self.max_sample_size}, "
+            f"code_input={self.code_input}"
         )
 
     def get_audio(self, index):
@@ -230,7 +229,7 @@ class HubertDataset(FairseqDataset):
     def __getitem__(self, index):
         wav = self.get_audio(index)
         labels = self.get_labels(index)
-        if hasattr(self, "code_paths") and self.code_paths is not None:
+        if self.code_paths is not None:
             codes = [self.get_code(index)]
             return {"id": index, "source": wav, "label_list": labels, "code_list": codes}
         else:
@@ -274,7 +273,7 @@ class HubertDataset(FairseqDataset):
         targets_list, lengths_list, ntokens_list = self.collater_label(
             targets_by_label, audio_size, audio_starts
         )
-        if hasattr(self, "code_paths") and self.code_paths != None:
+        if self.code_paths is not None:
             targets_by_code = [
                 [s["code_list"][0] for s in samples]
             ]
@@ -297,7 +296,11 @@ class HubertDataset(FairseqDataset):
         if self.single_target:
             batch["target_lengths"] = lengths_list[0]
             batch["ntokens"] = ntokens_list[0]
-            batch["target"] = targets_list[0]
+            if self.fine_tuning:
+                batch["target"] = targets_list[0]
+            else:
+                # when pre-training, use code as input not target
+                net_input["source_codes"] = targets_list[0]
         else:
             batch["target_lengths_list"] = lengths_list
             batch["ntokens_list"] = ntokens_list
@@ -333,7 +336,7 @@ class HubertDataset(FairseqDataset):
         if not self.pad_audio:
             rem_size = [len(t) - s for t, s in zip(targets, frm_starts)]
             frm_size = min(frm_size, *rem_size)
-        targets = [t[s : s + frm_size] for t, s in zip(targets, frm_starts)]
+        targets = [t[s: s + frm_size] for t, s in zip(targets, frm_starts)]
         logger.debug(f"audio_starts={audio_starts}")
         logger.debug(f"frame_starts={frm_starts}")
         logger.debug(f"frame_size={frm_size}")
