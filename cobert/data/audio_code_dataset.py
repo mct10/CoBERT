@@ -300,7 +300,7 @@ class CodeDataset(FairseqDataset):
                 batch["target"] = targets_list[0]
             else:
                 # when pre-training, use code as input not target
-                net_input["source_codes"] = targets_list[0]
+                batch["net_input"]["source_codes"] = targets_list[0]
         else:
             batch["target_lengths_list"] = lengths_list
             batch["ntokens_list"] = ntokens_list
