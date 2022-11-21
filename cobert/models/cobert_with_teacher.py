@@ -15,8 +15,6 @@ import torch.distributed as dist
 from fairseq import checkpoint_utils, tasks
 from fairseq.data.data_utils import compute_mask_indices
 from fairseq.dataclass.utils import convert_namespace_to_omegaconf
-from fairseq.models.data2vec.data2vec_audio import Data2VecAudioModel
-from fairseq.models.data2vec.data2vec_code import Data2VecCodeModel
 from fairseq.models import BaseFairseqModel, register_model
 from fairseq.models.hubert import HubertModel
 from fairseq.modules import EMAModule, EMAModuleConfig
@@ -31,10 +29,12 @@ from fairseq.modules import (
 )
 from fairseq.utils import index_put
 
+from cobert.models.code_teacher_1 import CodeTeacher1
+from cobert.models.code_teacher_2 import CodeTeacher2
 
 logger = logging.getLogger(__name__)
 
-LENGTH_TOLERANCE=4
+LENGTH_TOLERANCE = 4
 
 
 @dataclass
@@ -121,7 +121,7 @@ class CobertWithTeacherConfig(Wav2Vec2Config):
     )
 
 
-def _load_cobert(_cfg: CobertWithTeacherConfig) -> HubertModel:
+def _load_code_teacher_1(_cfg: CobertWithTeacherConfig) -> CodeTeacher1:
     # should not override args, we need to keep the teacher as it was.
     state = checkpoint_utils.load_checkpoint_to_cpu(_cfg.code_teacher_ckpt)
     w2v_args = state.get("cfg", None)
@@ -144,7 +144,7 @@ def _load_cobert(_cfg: CobertWithTeacherConfig) -> HubertModel:
     return model
 
 
-def _load_data2vec_audio(_cfg: CobertWithTeacherConfig) -> Data2VecAudioModel:
+def _load_data2vec_audio(_cfg: CobertWithTeacherConfig):
     # This loads both data2vec_audio model and data2vec_audio_code model.
     state = checkpoint_utils.load_checkpoint_to_cpu(_cfg.code_teacher_ckpt)
     w2v_args = state.get("cfg", None)
@@ -180,7 +180,7 @@ def _load_data2vec_audio(_cfg: CobertWithTeacherConfig) -> Data2VecAudioModel:
     return model
 
 
-def _load_data2vec_code(_cfg: CobertWithTeacherConfig) -> Data2VecCodeModel:
+def _load_code_teacher_2(_cfg: CobertWithTeacherConfig) -> CodeTeacher2:
     state = checkpoint_utils.load_checkpoint_to_cpu(_cfg.code_teacher_ckpt)
     w2v_args = state.get("cfg", None)
     if w2v_args is None:
@@ -203,6 +203,7 @@ def _load_data2vec_code(_cfg: CobertWithTeacherConfig) -> Data2VecCodeModel:
 
     model.remove_pretraining_modules()
     return model
+
 
 def _load_hubert(_cfg: CobertWithTeacherConfig) -> HubertModel:
     # do code input inference here.
@@ -298,10 +299,10 @@ class CobertWithTeacherModel(BaseFairseqModel):
         self.code_teacher_type = cfg.code_teacher_type
         if cfg.code_teacher_ckpt is not None and os.path.exists(cfg.code_teacher_ckpt):
             logger.info(f"Will load code teacher {self.code_teacher_type} from {cfg.code_teacher_ckpt}")
-            if self.code_teacher_type == "cobert":
-                self.code_teacher_model: HubertModel = _load_cobert(cfg)
-            elif self.code_teacher_type == "data2vec_code":
-                self.code_teacher_model: Data2VecCodeModel = _load_data2vec_code(cfg)
+            if self.code_teacher_type == "code_teacher_1":
+                self.code_teacher_model: CodeTeacher1 = _load_code_teacher_1(cfg)
+            elif self.code_teacher_type == "code_teacher_2":
+                self.code_teacher_model: CodeTeacher2 = _load_code_teacher_2(cfg)
             elif self.code_teacher_type == "data2vec_audio":
                 self.code_teacher_model = _load_data2vec_audio(cfg)
             elif self.code_teacher_type == "hubert":
@@ -385,11 +386,11 @@ class CobertWithTeacherModel(BaseFairseqModel):
         return cls(cfg)
 
     def apply_mask(
-        self,
-        x,
-        padding_mask,
-        mask_indices=None,
-        mask_channel_indices=None,
+            self,
+            x,
+            padding_mask,
+            mask_indices=None,
+            mask_channel_indices=None,
     ):
         B, T, C = x.shape
 
@@ -470,7 +471,6 @@ class CobertWithTeacherModel(BaseFairseqModel):
             )
 
         return input_lengths.to(torch.long)
-
 
     def forward(
             self,
@@ -590,12 +590,12 @@ class CobertWithTeacherModel(BaseFairseqModel):
             # T x B x C
             code_y = None
             if self.code_teacher_type == "cobert":
-                code_y, feat_padding_mask = self._get_cobert_feature(source_codes, orig_padding_mask)
+                code_y, feat_padding_mask = self._get_code_teacher_1_feature(source_codes, orig_padding_mask)
                 assert len(code_y) == self.cfg.code_teacher_max_layer - self.cfg.code_teacher_min_layer
                 # T,B,C -> B,T,C
                 # origin_hubert_feature = code_y[-1].transpose(0, 1)
             if self.code_teacher_type == "data2vec_code":
-                code_y = self._get_data2vec_code_feature(source_codes)
+                code_y = self._get_code_teacher_2_feature(source_codes)
                 assert len(code_y) == self.cfg.code_teacher_max_layer - self.cfg.code_teacher_min_layer
             if self.code_teacher_type == "data2vec_audio":
                 code_y = self._get_data2vec_audio_feature(source, orig_padding_mask)
@@ -685,7 +685,6 @@ class CobertWithTeacherModel(BaseFairseqModel):
             if self.multi_outputs:
                 result["pred_for_code_teacher_var"] = self.compute_var(x_for_code_teacher.float())
 
-
         if not self.code_loss_only:
             if self.num_updates > 5000 and result["target_var"] < self.cfg.min_target_var:
                 logger.error(
@@ -766,9 +765,9 @@ class CobertWithTeacherModel(BaseFairseqModel):
 
         return y
 
-    def _get_cobert_feature(self, source_codes, padding_mask):
-        # use .eval() every time!!!!!
-        self.code_teacher_model: HubertModel
+    def _get_code_teacher_1_feature(self, source_codes, padding_mask):
+        # use .eval() every time
+        self.code_teacher_model: CodeTeacher1
         self.code_teacher_model.eval()
         # T x B x C
         all_layer_results, feat_padding_mask = self.code_teacher_model.extract_features(
@@ -782,7 +781,6 @@ class CobertWithTeacherModel(BaseFairseqModel):
         return all_features[self.cfg.code_teacher_min_layer:self.cfg.code_teacher_max_layer], feat_padding_mask
 
     def _get_data2vec_audio_feature(self, source, padding_mask):
-        self.code_teacher_model: Data2VecAudioModel
         self.code_teacher_model.eval()
         ret = self.code_teacher_model.extract_features(
             source=source,
@@ -793,8 +791,8 @@ class CobertWithTeacherModel(BaseFairseqModel):
         all_features = [layer_result[2] for layer_result in all_layer_results]
         return all_features[self.cfg.code_teacher_min_layer:self.cfg.code_teacher_max_layer]
 
-    def _get_data2vec_code_feature(self, source):
-        self.code_teacher_model: Data2VecCodeModel
+    def _get_code_teacher_2_feature(self, source):
+        self.code_teacher_model: CodeTeacher2
         self.code_teacher_model.eval()
         ret = self.code_teacher_model.extract_features(
             source,
@@ -806,7 +804,7 @@ class CobertWithTeacherModel(BaseFairseqModel):
         return all_features[self.cfg.code_teacher_min_layer:self.cfg.code_teacher_max_layer]
 
     def _get_hubert_feature(self, source, padding_mask):
-        # use .eval() every time!!!!!
+        # use .eval() every time
         self.code_teacher_model: HubertModel
         self.code_teacher_model.eval()
         # T x B x C
@@ -851,7 +849,7 @@ class CobertWithTeacherModel(BaseFairseqModel):
             return torch.sqrt(y.var(dim=0) + 1e-6).mean()
 
     def extract_features(
-        self, source, padding_mask, mask=False, layer=None
+            self, source, padding_mask, mask=False, layer=None
     ):
         res = self.forward(
             source=source,
