@@ -1,6 +1,7 @@
 import logging
 import math
 from dataclasses import dataclass, field
+from typing import Optional
 
 import numpy as np
 import torch
@@ -10,10 +11,11 @@ import torch.distributed as dist
 
 from fairseq.data.data_utils import compute_mask_indices
 from fairseq.models import register_model, BaseFairseqModel
-from fairseq.models.data2vec import Data2VecAudioConfig
 from fairseq.models.transformer import Embedding
+from fairseq.models.wav2vec import Wav2Vec2Config
 from fairseq.modules import LayerNorm, PositionalEmbedding, SamePad, TransposeLast, EMAModuleConfig, EMAModule
 from fairseq.utils import index_put
+from omegaconf import II
 
 from .modules.code_encoder import TransformerEncoder
 from ..tasks.code_teacher_2_pretraining import CodeTeacher2PretrainingConfig
@@ -22,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class CodeTeacher2Config(Data2VecAudioConfig):
+class CodeTeacher2Config(Wav2Vec2Config):
     no_scale_embedding: bool = field(
         default=False,
         metadata={"help": "not scale embedding"},
@@ -44,6 +46,55 @@ class CodeTeacher2Config(Data2VecAudioConfig):
         metadata={"help": "whether to apply mask according to code boundary."
                           "by default, apply span mask."}
     )
+
+    # original Data2VecAudioConfig
+    loss_beta: float = field(
+        default=0, metadata={"help": "beta for smooth l1 loss. 0 means use l2 loss"}
+    )
+    loss_scale: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "scale the reconstruction loss by this constant. if None then scales by 1/sqrt(dim)"
+        },
+    )
+    average_top_k_layers: int = field(
+        default=8, metadata={"help": "how many layers to average"}
+    )
+
+    layer_norm_target_layer: bool = False
+    instance_norm_target_layer: bool = False
+    instance_norm_targets: bool = False
+    layer_norm_targets: bool = False
+    batch_norm_target_layer: bool = False
+    group_norm_target_layer: bool = False
+
+    ema_decay: float = field(default=0.999, metadata={"help": "initial ema decay rate"})
+    ema_end_decay: float = field(
+        default=0.9999, metadata={"help": "final ema decay rate"}
+    )
+
+    # when to finish annealing ema decay rate
+    ema_anneal_end_step: int = II("optimization.max_update")
+
+    ema_transformer_only: bool = field(
+        default=True,
+        metadata={"help": "whether to momentum update only the transformer"},
+    )
+    ema_layers_only: bool = field(
+        default=True,
+        metadata={"help": "whether to momentum update only the transformer layers"},
+    )
+
+    max_update: int = II("optimization.max_update")
+
+    min_target_var: float = field(
+        default=0.1, metadata={"help": "stop training if target var falls below this"}
+    )
+    min_pred_var: float = field(
+        default=0.01,
+        metadata={"help": "stop training if prediction var falls below this"},
+    )
+
 
 
 def get_annealed_rate(start, end, curr_step, total_steps):
