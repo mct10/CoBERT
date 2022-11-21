@@ -6,11 +6,13 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from dataclasses import dataclass, field
-from fairseq.data import Dictionary, HubertDataset
+from fairseq.data import Dictionary
 from fairseq.dataclass.configs import FairseqDataclass
 from fairseq.tasks import register_task
 from fairseq.tasks.fairseq_task import FairseqTask
 from omegaconf import MISSING
+
+from ..data.audio_code_dataset import AudioCodeDataset
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +30,10 @@ class LabelEncoder(object):
 
 
 @dataclass
-class HubertPretrainingConfig(FairseqDataclass):
+class CodeTeacher1PretrainingConfig(FairseqDataclass):
     data: str = field(default=MISSING, metadata={"help": "path to data directory"})
     fine_tuning: bool = field(
-        default=False, metadata={"help": "set to true if fine-tuning Hubert"}
+        default=False, metadata={"help": "set to true if fine-tuning code_teacher_1"}
     )
     labels: List[str] = field(
         default_factory=lambda: ["ltr"],
@@ -93,10 +95,6 @@ class HubertPretrainingConfig(FairseqDataclass):
         default=False,
         metadata={"help": "pad audio to the longest one in the batch if true"},
     )
-    code_input: Optional[bool] = field(
-        default=False,
-        metadata={"help": "code as the hubert input"},
-    )
     code_dir: Optional[str] = field(
         default=None,
         metadata={
@@ -109,19 +107,19 @@ class HubertPretrainingConfig(FairseqDataclass):
     )
 
 
-@register_task("hubert_pretraining", dataclass=HubertPretrainingConfig)
-class HubertPretrainingTask(FairseqTask):
+@register_task("code_teacher_1_pretraining", dataclass=CodeTeacher1PretrainingConfig)
+class CodeTeacher1PretrainingTask(FairseqTask):
 
-    cfg: HubertPretrainingConfig
+    cfg: CodeTeacher1PretrainingConfig
 
     def __init__(
         self,
-        cfg: HubertPretrainingConfig,
+        cfg: CodeTeacher1PretrainingConfig,
     ) -> None:
         super().__init__(cfg)
 
         logger.info(f"current directory is {os.getcwd()}")
-        logger.info(f"HubertPretrainingTask Config {cfg}")
+        logger.info(f"CodeTeacher1PretrainingTask Config {cfg}")
 
         self.cfg = cfg
         self.fine_tuning = cfg.fine_tuning
@@ -147,8 +145,8 @@ class HubertPretrainingTask(FairseqTask):
 
     @classmethod
     def setup_task(
-        cls, cfg: HubertPretrainingConfig, **kwargs
-    ) -> "HubertPretrainingTask":
+        cls, cfg: CodeTeacher1PretrainingConfig, **kwargs
+    ) -> "CodeTeacher1PretrainingTask":
         return cls(cfg)
 
     def load_dictionaries(self):
@@ -172,7 +170,7 @@ class HubertPretrainingTask(FairseqTask):
         procs = [LabelEncoder(dict) for dict in dicts]
         paths = [f"{self.get_label_dir()}/{split}.{l}" for l in self.cfg.labels]
 
-        if self.cfg.fine_tuning and self.cfg.code_input:
+        if self.cfg.fine_tuning:
             assert self.cfg.code_dir is not None
             code_paths = [f"{self.cfg.code_dir}/{split}.km"]
             code_procs = [LabelEncoder(dict) for dict in [Dictionary.load(f"{self.cfg.code_dir}/dict.km.txt")]]
@@ -180,8 +178,7 @@ class HubertPretrainingTask(FairseqTask):
             code_paths = None
             code_procs = None
 
-        # hubert v1: pad_audio=True, random_crop=False;
-        self.datasets[split] = HubertDataset(
+        self.datasets[split] = AudioCodeDataset(
             manifest,
             sample_rate=self.cfg.sample_rate,
             label_paths=paths,
@@ -197,7 +194,7 @@ class HubertPretrainingTask(FairseqTask):
             store_labels=False,
             random_crop=self.cfg.random_crop,
             single_target=self.cfg.single_target,
-            code_input=self.cfg.code_input,
+            code_input=True,
             code_paths=code_paths,
             code_processors=code_procs,
             code_rate=self.cfg.code_rate,

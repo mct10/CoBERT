@@ -102,7 +102,7 @@ def verify_label_lengths(
         )
 
 
-class CodeDataset(FairseqDataset):
+class AudioCodeDataset(FairseqDataset):
     def __init__(
             self,
             manifest_path: str,
