@@ -26,7 +26,7 @@ from fairseq.models.wav2vec.wav2vec2 import (
 from fairseq.modules import GradMultiply, LayerNorm, PositionalEmbedding, TransposeLast, SamePad
 from fairseq.models.transformer import Embedding
 
-from modules.code_encoder import TransformerEncoder
+from .modules.code_encoder import TransformerEncoder
 
 logger = logging.getLogger(__name__)
 
