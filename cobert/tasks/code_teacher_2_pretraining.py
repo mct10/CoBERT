@@ -1,22 +1,34 @@
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List
 
 from omegaconf import II, MISSING, OmegaConf
 
 from fairseq.data import Dictionary
-from fairseq.data.audio.raw_audio_code_dataset import FileAudioCodeDataset
 from fairseq.dataclass import FairseqDataclass
 from fairseq.tasks import register_task, FairseqTask
-from fairseq.tasks.hubert_pretraining import LabelEncoder
+
+from cobert.data.audio_code_dataset import AudioCodeDataset
 
 
 logger = logging.getLogger(__name__)
 
 
+class LabelEncoder(object):
+    def __init__(self, dictionary: Dictionary) -> None:
+        self.dictionary = dictionary
+
+    def __call__(self, label: str) -> List[str]:
+        return self.dictionary.encode_line(
+            label,
+            append_eos=False,
+            add_if_not_exist=False,
+        )
+
+
 @dataclass
-class SpeechCodePretrainingConfig(FairseqDataclass):
+class CodeTeacher2PretrainingConfig(FairseqDataclass):
     data: str = field(
         default=MISSING,
         metadata={"help": "path to data directory."
@@ -84,14 +96,14 @@ class SpeechCodePretrainingConfig(FairseqDataclass):
     )
 
 
-@register_task("speech_code_pretraining", dataclass=SpeechCodePretrainingConfig)
-class SpeechCodePretrainingTask(FairseqTask):
+@register_task("code_teacher_2_pretraining", dataclass=CodeTeacher2PretrainingConfig)
+class CodeTeacher2PretrainingTask(FairseqTask):
     """
     This task is responsible for code input tasks.
     If pre-training, then code is the input. No explicit output is provided.
     If fine-tuning, then code is the input, and ltr is the output.
     """
-    def __init__(self, cfg: SpeechCodePretrainingConfig, code_dict, ltr_dict=None):
+    def __init__(self, cfg: CodeTeacher2PretrainingConfig, code_dict, ltr_dict=None):
         super().__init__(cfg)
         self.cfg = cfg
         self.fine_tuning = cfg.fine_tuning
@@ -101,11 +113,11 @@ class SpeechCodePretrainingTask(FairseqTask):
         self.letter_dictionary = ltr_dict
 
     @classmethod
-    def setup_task(cls, cfg: SpeechCodePretrainingConfig, **kwargs):
+    def setup_task(cls, cfg: CodeTeacher2PretrainingConfig, **kwargs):
         """Setup the task (e.g., load dictionaries).
 
         Args:
-            cfg (SpeechCodePretrainingConfig): configuration of this task
+            cfg (CodeTeacher2PretrainingConfig): configuration of this task
         """
         code_dict_path = os.path.join(cfg.data, f"dict.{cfg.label}.txt")
         if not os.path.exists(code_dict_path):
@@ -141,7 +153,7 @@ class SpeechCodePretrainingTask(FairseqTask):
             # the dataset only returns speech and code.
             # speech as the 'source', code as the 'source_codes'.
             # but only the code is expected to be used.
-            self.datasets[split] = FileAudioCodeDataset(
+            self.datasets[split] = AudioCodeDataset(
                 audio_manifest,
                 sample_rate=self.cfg.sample_rate,
                 label_paths=[code_file],
@@ -153,18 +165,23 @@ class SpeechCodePretrainingTask(FairseqTask):
                 max_keep_sample_size=self.cfg.max_keep_size,
                 min_keep_sample_size=self.cfg.min_sample_size,
                 max_sample_size=self.cfg.max_sample_size,
+                shuffle=True,
                 pad_audio=self.cfg.pad_audio,
                 normalize=self.cfg.normalize,
                 store_labels=True,
                 random_crop=self.cfg.random_crop,
-                # TODO: support only ONE kind of hubert code now.
-                single_target=True
+                # TODO: support only ONE kind of code now.
+                single_target=True,
+                code_input=False,
+                code_paths=None,
+                code_processors=None,
+                code_rate=None
             )
         else:
             label_file = os.path.join(self.cfg.label_dir, f"{split}.{self.cfg.label_suffix}")
             # the dataset returns the code, and label.
             # code as the 'source', label as the 'target'
-            self.datasets[split] = FileAudioCodeDataset(
+            self.datasets[split] = AudioCodeDataset(
                 audio_manifest,
                 sample_rate=self.cfg.sample_rate,
                 label_paths=[label_file],
@@ -176,11 +193,12 @@ class SpeechCodePretrainingTask(FairseqTask):
                 max_keep_sample_size=self.cfg.max_keep_size,
                 min_keep_sample_size=self.cfg.min_sample_size,
                 max_sample_size=self.cfg.max_sample_size,
+                shuffle=True,
                 pad_audio=self.cfg.pad_audio,
                 normalize=self.cfg.normalize,
                 store_labels=True,
                 random_crop=self.cfg.random_crop,
-                # TODO: support only ONE kind of hubert code now.
+                # TODO: support only ONE kind of code now.
                 single_target=True,
                 code_input=True,
                 code_paths=[code_file],
