@@ -16,7 +16,6 @@ from fairseq import checkpoint_utils, tasks
 from fairseq.data.data_utils import compute_mask_indices
 from fairseq.dataclass.utils import convert_namespace_to_omegaconf
 from fairseq.models import BaseFairseqModel, register_model
-from fairseq.models.hubert import HubertModel
 from fairseq.modules import EMAModule, EMAModuleConfig
 from fairseq.models.wav2vec import (
     ConvFeatureExtractionModel,
@@ -31,6 +30,7 @@ from fairseq.utils import index_put
 
 from cobert.models.code_teacher_1 import CodeTeacher1
 from cobert.models.code_teacher_2 import CodeTeacher2
+from cobert.models.hubert_teacher import HubertTeacherModel
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +205,7 @@ def _load_code_teacher_2(_cfg: CobertWithTeacherConfig) -> CodeTeacher2:
     return model
 
 
-def _load_hubert(_cfg: CobertWithTeacherConfig) -> HubertModel:
+def _load_hubert(_cfg: CobertWithTeacherConfig) -> HubertTeacherModel:
     # do code input inference here.
     state = checkpoint_utils.load_checkpoint_to_cpu(_cfg.code_teacher_ckpt)
     w2v_args = state.get("cfg", None)
@@ -220,7 +220,8 @@ def _load_hubert(_cfg: CobertWithTeacherConfig) -> HubertModel:
     pretrain_task = tasks.setup_task(w2v_args.task)
     # This will load the stored "dictionaries" object
     pretrain_task.load_state_dict(state["task_state"])
-
+    # use hubert_teacher model instead of original hubert model
+    w2v_args.model['_name'] = "hubert_teacher"
     model = pretrain_task.build_model(w2v_args.model, from_checkpoint=True)
     # can be strict here
     model.load_state_dict(state["model"], strict=True)
@@ -308,7 +309,7 @@ class CobertWithTeacherModel(BaseFairseqModel):
             elif self.code_teacher_type == "data2vec_audio":
                 self.code_teacher_model = _load_data2vec_audio(cfg)
             elif self.code_teacher_type == "hubert":
-                self.code_teacher_model: HubertModel = _load_hubert(cfg)
+                self.code_teacher_model: HubertTeacherModel = _load_hubert(cfg)
             self.code_teacher_model.requires_grad_(requires_grad=False)
             self.code_teacher_model.eval()
             # log the parameters to make sure all parameters are correctly set
@@ -802,7 +803,7 @@ class CobertWithTeacherModel(BaseFairseqModel):
 
     def _get_hubert_feature(self, source, padding_mask):
         # use .eval() every time
-        self.code_teacher_model: HubertModel
+        self.code_teacher_model: HubertTeacherModel
         self.code_teacher_model.eval()
         # T x B x C
         all_layer_results, _ = self.code_teacher_model.extract_features(
