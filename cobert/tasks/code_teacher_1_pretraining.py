@@ -12,7 +12,7 @@ from fairseq.tasks import register_task
 from fairseq.tasks.fairseq_task import FairseqTask
 from omegaconf import MISSING
 
-from ..data.audio_code_dataset import AudioCodeDataset
+from cobert.data.audio_code_dataset import AudioCodeDataset
 
 logger = logging.getLogger(__name__)
 
