@@ -11,39 +11,28 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from omegaconf import II
 
 from fairseq import utils
 from fairseq.data.data_utils import compute_mask_indices
 from fairseq.data.dictionary import Dictionary
 from fairseq.dataclass import ChoiceEnum, FairseqDataclass
-from fairseq.distributed import fsdp_wrap
 from fairseq.models import BaseFairseqModel, register_model
-from fairseq.models.wav2vec import pad_to_multiple, TransformerSentenceEncoderLayer, make_conv_pos
 from fairseq.models.wav2vec.wav2vec2 import (
     EXTRACTOR_MODE_CHOICES,
     MASKING_DISTRIBUTION_CHOICES,
     LAYER_TYPE_CHOICES,
-    ConvFeatureExtractionModel,
 )
 from fairseq.modules import GradMultiply, LayerNorm, PositionalEmbedding, TransposeLast, SamePad
-from fairseq.modules.checkpoint_activations import checkpoint_wrapper
-from fairseq.modules.conformer_layer import ConformerWav2Vec2EncoderLayer
-from fairseq.modules.transformer_sentence_encoder import init_bert_params
-from fairseq.tasks.hubert_pretraining import (
-    HubertPretrainingConfig,
-    HubertPretrainingTask,
-)
 from fairseq.models.transformer import Embedding
-from fairseq.utils import index_put
 
+from modules.code_encoder import TransformerEncoder
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class HubertConfig(FairseqDataclass):
+class CodeTeacher1Config(FairseqDataclass):
     label_rate: float = II("task.label_rate")
 
     extractor_mode: EXTRACTOR_MODE_CHOICES = field(
@@ -247,7 +236,6 @@ class HubertConfig(FairseqDataclass):
     fp16: bool = field(default=False, metadata={"help": "If fp16 is being used"})
 
     # For code input
-    code_input: bool = II("task.code_input")
     no_scale_embedding: bool = field(
         default=False,
         metadata={"help": "not scale embedding"},
@@ -268,57 +256,43 @@ class HubertConfig(FairseqDataclass):
     )
 
 
-@register_model("hubert", dataclass=HubertConfig)
-class HubertModel(BaseFairseqModel):
+@register_model("code_teacher_1", dataclass=CodeTeacher1Config)
+class CodeTeacher1(BaseFairseqModel):
+    """
+    This class defines the code_teacher_1 model, which is trained with mask language modeling objective on codes.
+    """
     def __init__(
         self,
-        cfg: HubertConfig,
-        task_cfg: HubertPretrainingConfig,
+        cfg: CodeTeacher1Config,
+        task_cfg,
         dictionaries: List[Dictionary],
     ) -> None:
         super().__init__()
-        logger.info(f"HubertModel Config: {cfg}")
+        logger.info(f"CodeTeacher1 Config: {cfg}")
 
         feature_enc_layers = eval(cfg.conv_feature_layers)  # noqa
         self.embed = feature_enc_layers[-1][0]
 
-        try:
-            import omegaconf
-            self.code_input = cfg.code_input
-        except omegaconf.errors.ConfigKeyError as err:
-            logger.error(err)
-            logger.error(f"Cannot infer code input from task. The model could from an old version"
-                         f"Treat as audio input. Please check whether this meets your expectation.")
-            self.code_input = False
-        logger.info(f"code_input={self.code_input}")
-        if self.code_input:
-            def build_embedding(dictionary, embed_dim):
-                num_embeddings = len(dictionary)
-                padding_idx = dictionary.pad()
-                return Embedding(num_embeddings, embed_dim, padding_idx)
+        def build_embedding(dictionary, embed_dim):
+            num_embeddings = len(dictionary)
+            padding_idx = dictionary.pad()
+            return Embedding(num_embeddings, embed_dim, padding_idx)
 
-            self.encoder_embed_tokens = build_embedding(
-                dictionaries[0], self.embed
-            )
-            self.padding_idx = self.encoder_embed_tokens.padding_idx
-            if cfg.no_sin_pos_embed:
-                self.embed_positions = None
-            else:
-                self.embed_positions = PositionalEmbedding(
-                    int(task_cfg.max_sample_size / 320) + 1,
-                    self.embed,
-                    self.padding_idx,
-                    learned=cfg.learned_pos,
-                )
-            self.embed_scale = 1.0 if cfg.no_scale_embedding \
-                else math.sqrt(self.embed)
+        self.encoder_embed_tokens = build_embedding(
+            dictionaries[0], self.embed
+        )
+        self.padding_idx = self.encoder_embed_tokens.padding_idx
+        if cfg.no_sin_pos_embed:
+            self.embed_positions = None
         else:
-            self.feature_extractor = ConvFeatureExtractionModel(
-                conv_layers=feature_enc_layers,
-                dropout=0.0,
-                mode=cfg.extractor_mode,
-                conv_bias=cfg.conv_bias,
+            self.embed_positions = PositionalEmbedding(
+                int(task_cfg.max_sample_size / 320) + 1,
+                self.embed,
+                self.padding_idx,
+                learned=cfg.learned_pos,
             )
+        self.embed_scale = 1.0 if cfg.no_scale_embedding \
+            else math.sqrt(self.embed)
 
         feature_ds_rate = np.prod([s for _, _, s in feature_enc_layers])
         self.feat2tar_ratio = cfg.label_rate * feature_ds_rate / task_cfg.sample_rate
@@ -391,10 +365,10 @@ class HubertModel(BaseFairseqModel):
         return state_dict
 
     @classmethod
-    def build_model(cls, cfg: HubertConfig, task: HubertPretrainingTask):
+    def build_model(cls, cfg: CodeTeacher1Config, task):
         """Build a new model instance."""
 
-        model = HubertModel(cfg, task.cfg, task.dictionaries)
+        model = CodeTeacher1Config(cfg, task.cfg, task.dictionaries)
         return model
 
     def apply_mask(self, x, padding_mask, target_list):
@@ -497,17 +471,15 @@ class HubertModel(BaseFairseqModel):
         return_all_layers: bool = False
     ) -> Dict[str, torch.Tensor]:
         """output layer is 1-based"""
-        if self.code_input:
-            encoder_padding_mask = source.eq(self.padding_idx)
-            has_pads = encoder_padding_mask.any()
-            features = self.embed_scale * self.encoder_embed_tokens(source)
-            if self.embed_positions is not None:
-                features = features + self.embed_positions(source)
-            if has_pads:
-                features = features * (1 - encoder_padding_mask.unsqueeze(-1).type_as(features))
-            features = features.transpose(1, 2)
-        else:
-            features = self.forward_features(source)
+        encoder_padding_mask = source.eq(self.padding_idx)
+        has_pads = encoder_padding_mask.any()
+        features = self.embed_scale * self.encoder_embed_tokens(source)
+        if self.embed_positions is not None:
+            features = features + self.embed_positions(source)
+        if has_pads:
+            features = features * (1 - encoder_padding_mask.unsqueeze(-1).type_as(features))
+        features = features.transpose(1, 2)
+
         if target_list is not None:
             features, target_list = self.forward_targets(features, target_list)
 
@@ -647,178 +619,3 @@ class HubertModel(BaseFairseqModel):
     def remove_pretraining_modules(self):
         self.target_glu = None
         self.final_proj = None
-
-
-class TransformerEncoder(nn.Module):
-    def build_encoder_layer(self, args: HubertConfig):
-        if args.layer_type == "transformer":
-            layer = TransformerSentenceEncoderLayer(
-                embedding_dim=self.embedding_dim,
-                ffn_embedding_dim=args.encoder_ffn_embed_dim,
-                num_attention_heads=args.encoder_attention_heads,
-                dropout=self.dropout,
-                attention_dropout=args.attention_dropout,
-                activation_dropout=args.activation_dropout,
-                activation_fn=args.activation_fn,
-                layer_norm_first=args.layer_norm_first,
-            )
-        elif args.layer_type == "conformer":
-            layer = ConformerWav2Vec2EncoderLayer(
-                embed_dim=self.embedding_dim,
-                ffn_embed_dim=args.encoder_ffn_embed_dim,
-                attention_heads=args.encoder_attention_heads,
-                dropout=args.dropout,
-                depthwise_conv_kernel_size=args.depthwise_conv_kernel_size,
-                activation_fn="swish",
-                attn_type=args.attn_type,
-                use_fp16=args.fp16,
-                pos_enc_type="abs",
-            )
-        layer = fsdp_wrap(layer)
-        if args.checkpoint_activations:
-            layer = checkpoint_wrapper(layer)
-        return layer
-
-    def __init__(self, args: HubertConfig):
-        super().__init__()
-
-        self.dropout = args.dropout
-        self.embedding_dim = args.encoder_embed_dim
-        self.required_seq_len_multiple = args.required_seq_len_multiple
-
-        if args.no_pos_conv:
-            self.pos_conv = None
-            logger.info(f"No pos_conv is used.")
-        else:
-            logger.info(f"pos_conv is used.")
-            pos_conv_depth = getattr(args, "pos_conv_depth", 1)
-            if pos_conv_depth > 1:
-                num_layers = args.pos_conv_depth
-                k = max(3, args.conv_pos // num_layers)
-
-                def make_conv_block(e, k, g, l):
-                    return nn.Sequential(
-                        *[
-                            nn.Sequential(
-                                nn.Conv1d(
-                                    e,
-                                    e,
-                                    kernel_size=k,
-                                    padding=k // 2,
-                                    groups=g,
-                                ),
-                                SamePad(k),
-                                TransposeLast(),
-                                LayerNorm(e, elementwise_affine=False),
-                                TransposeLast(),
-                                nn.GELU(),
-                            )
-                            for _ in range(l)
-                        ]
-                    )
-
-                self.pos_conv = make_conv_block(
-                    self.embedding_dim, k, args.conv_pos_groups, num_layers
-                )
-
-            else:
-                self.pos_conv = make_conv_pos(
-                    self.embedding_dim,
-                    args.conv_pos,
-                    args.conv_pos_groups,
-                )
-
-        self.layers = nn.ModuleList(
-            [self.build_encoder_layer(args) for _ in range(args.encoder_layers)]
-        )
-        self.layer_norm_first = args.layer_norm_first
-        self.layer_norm = LayerNorm(self.embedding_dim)
-        self.layerdrop = args.encoder_layerdrop
-
-        self.apply(init_bert_params)
-
-    def forward(self, x, padding_mask=None, layer=None):
-        x, layer_results = self.extract_features(x, padding_mask, layer)
-
-        if self.layer_norm_first and layer is None:
-            x = self.layer_norm(x)
-
-        return x, layer_results
-
-    def extract_features(
-            self,
-            x,
-            padding_mask=None,
-            tgt_layer=None,
-            min_layer=0,
-    ):
-
-        if padding_mask is not None:
-            x = index_put(x, padding_mask, 0)
-
-        if self.pos_conv is not None:
-            x_conv = self.pos_conv(x.transpose(1, 2))
-            x_conv = x_conv.transpose(1, 2)
-            x = x + x_conv
-
-        if not self.layer_norm_first:
-            x = self.layer_norm(x)
-
-        # pad to the sequence length dimension
-        x, pad_length = pad_to_multiple(
-            x, self.required_seq_len_multiple, dim=-2, value=0
-        )
-        if pad_length > 0 and padding_mask is None:
-            padding_mask = x.new_zeros((x.size(0), x.size(1)), dtype=torch.bool)
-            padding_mask[:, -pad_length:] = True
-        else:
-            padding_mask, _ = pad_to_multiple(
-                padding_mask, self.required_seq_len_multiple, dim=-1, value=True
-            )
-        x = F.dropout(x, p=self.dropout, training=self.training)
-
-        # B x T x C -> T x B x C
-        x = x.transpose(0, 1)
-
-        layer_results = []
-        r = None
-        for i, layer in enumerate(self.layers):
-            dropout_probability = np.random.random() if self.layerdrop > 0 else 1
-            if not self.training or (dropout_probability > self.layerdrop):
-                x, (z, lr) = layer(
-                    x, self_attn_padding_mask=padding_mask, need_weights=False
-                )
-                if i >= min_layer:
-                    layer_results.append((x, z, lr))
-            if i == tgt_layer:
-                r = x
-                break
-
-        if r is not None:
-            x = r
-
-        # T x B x C -> B x T x C
-        x = x.transpose(0, 1)
-
-        # undo paddding
-        if pad_length > 0:
-            x = x[:, :-pad_length]
-
-            def undo_pad(a, b, c):
-                return (
-                    a[:-pad_length],
-                    b[:-pad_length] if b is not None else b,
-                    c[:-pad_length],
-                )
-
-            layer_results = [undo_pad(*u) for u in layer_results]
-
-        return x, layer_results
-
-    def max_positions(self):
-        """Maximum output length supported by the encoder."""
-        return self.args.max_positions
-
-    def upgrade_state_dict_named(self, state_dict, name):
-        """Upgrade a (possibly old) state dict for new versions of fairseq."""
-        return state_dict
