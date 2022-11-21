@@ -238,6 +238,7 @@ def get_annealed_rate(start, end, curr_step, total_steps):
 @register_model("cobert_with_teacher", dataclass=CobertWithTeacherConfig)
 class CobertWithTeacherModel(BaseFairseqModel):
     cfg: CobertWithTeacherConfig
+    code_teacher_choices = ["code_teacher_1", "code_teacher_2", "data2vec_audio", "hubert"]
 
     def __init__(self, cfg: CobertWithTeacherConfig):
         super().__init__()
@@ -299,6 +300,7 @@ class CobertWithTeacherModel(BaseFairseqModel):
         self.code_teacher_type = cfg.code_teacher_type
         if cfg.code_teacher_ckpt is not None and os.path.exists(cfg.code_teacher_ckpt):
             logger.info(f"Will load code teacher {self.code_teacher_type} from {cfg.code_teacher_ckpt}")
+            assert self.code_teacher_type in CobertWithTeacherModel.code_teacher_choices
             if self.code_teacher_type == "code_teacher_1":
                 self.code_teacher_model: CodeTeacher1 = _load_code_teacher_1(cfg)
             elif self.code_teacher_type == "code_teacher_2":
@@ -311,7 +313,7 @@ class CobertWithTeacherModel(BaseFairseqModel):
             self.code_teacher_model.eval()
             # log the parameters to make sure all parameters are correctly set
             for name, param in self.named_parameters():
-                logger.info(f"{name}.requires_grad={param.requires_grad}")
+                logger.debug(f"{name}.requires_grad={param.requires_grad}")
         else:
             logger.warning(f"Connot load code teacher from {cfg.code_teacher_ckpt}. Make sure this is fine-tuning.")
 
@@ -589,22 +591,17 @@ class CobertWithTeacherModel(BaseFairseqModel):
             # compute code teacher representation
             # T x B x C
             code_y = None
-            if self.code_teacher_type == "cobert":
+            if self.code_teacher_type == "code_teacher_1":
                 code_y, feat_padding_mask = self._get_code_teacher_1_feature(source_codes, orig_padding_mask)
-                assert len(code_y) == self.cfg.code_teacher_max_layer - self.cfg.code_teacher_min_layer
-                # T,B,C -> B,T,C
-                # origin_hubert_feature = code_y[-1].transpose(0, 1)
-            if self.code_teacher_type == "data2vec_code":
+            if self.code_teacher_type == "code_teacher_2":
                 code_y = self._get_code_teacher_2_feature(source_codes)
-                assert len(code_y) == self.cfg.code_teacher_max_layer - self.cfg.code_teacher_min_layer
             if self.code_teacher_type == "data2vec_audio":
                 code_y = self._get_data2vec_audio_feature(source, orig_padding_mask)
-                assert len(code_y) == self.cfg.code_teacher_max_layer - self.cfg.code_teacher_min_layer
             if self.code_teacher_type == "hubert":
                 code_y = self._get_hubert_feature(source, orig_padding_mask)
-                assert len(code_y) == self.cfg.code_teacher_max_layer - self.cfg.code_teacher_min_layer
+            assert code_y is not None and \
+                   len(code_y) == self.cfg.code_teacher_max_layer - self.cfg.code_teacher_min_layer
 
-            assert code_y is not None
             # T x B x C -> B x T x C
             code_y = self._aggregate_features(code_y)
 
