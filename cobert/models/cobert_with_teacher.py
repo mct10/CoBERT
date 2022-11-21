@@ -1,28 +1,36 @@
 import logging
 import math
 import os
-from argparse import Namespace
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 from omegaconf import MISSING, II
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.distributed as dist
 
 from fairseq import checkpoint_utils, tasks
+from fairseq.data.data_utils import compute_mask_indices
 from fairseq.dataclass.utils import convert_namespace_to_omegaconf
-from fairseq.models.data2vec.data2vec_audio import Data2VecAudioConfig, Data2VecAudioModel
+from fairseq.models.data2vec.data2vec_audio import Data2VecAudioModel
 from fairseq.models.data2vec.data2vec_code import Data2VecCodeModel
-from fairseq.models import register_model
+from fairseq.models import BaseFairseqModel, register_model
 from fairseq.models.hubert import HubertModel
-from fairseq.models.roberta.model import RobertaModel
+from fairseq.modules import EMAModule, EMAModuleConfig
+from fairseq.models.wav2vec import (
+    ConvFeatureExtractionModel,
+    Wav2Vec2Config,
+    TransformerEncoder,
+)
 from fairseq.modules import (
     GradMultiply,
+    LayerNorm,
 )
-from fairseq.tasks.masked_lm import MaskedLMTask
+from fairseq.utils import index_put
+
 
 logger = logging.getLogger(__name__)
 
@@ -30,15 +38,17 @@ LENGTH_TOLERANCE=4
 
 
 @dataclass
-class Data2VecAudioCodeConfig(Data2VecAudioConfig):
+class CobertWithTeacherConfig(Wav2Vec2Config):
     code_teacher_ckpt: str = field(
         default=MISSING,
         metadata={"help": "The path to the ckpt of the teacher model. "
                           "If not provides, will act the same as origin data2vec."}
     )
     code_teacher_type: str = field(
-        default="roberta",
-        metadata={"help": "the type of code teacher"}
+        default="code_teacher_1",
+        metadata={"help": "the type of code teacher."
+                          "optionally, a speech encoder like HuBERT or data2vec_audio"
+                          "can also be a teacher."}
     )
     code_teacher_min_layer: int = field(
         default=0,
@@ -62,40 +72,56 @@ class Data2VecAudioCodeConfig(Data2VecAudioConfig):
     normalize: bool = II("task.normalize")
     code_path: str = II("task.data")
 
+    # original Data2VecAudioConfig
+    loss_beta: float = field(
+        default=0, metadata={"help": "beta for smooth l1 loss. 0 means use l2 loss"}
+    )
+    loss_scale: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "scale the reconstruction loss by this constant. if None then scales by 1/sqrt(dim)"
+        },
+    )
+    average_top_k_layers: int = field(
+        default=8, metadata={"help": "how many layers to average"}
+    )
 
-def _load_roberta(_cfg: Data2VecAudioCodeConfig):
-    checkpoint = torch.load(_cfg.code_teacher_ckpt)
+    layer_norm_target_layer: bool = False
+    instance_norm_target_layer: bool = False
+    instance_norm_targets: bool = False
+    layer_norm_targets: bool = False
+    batch_norm_target_layer: bool = False
+    group_norm_target_layer: bool = False
 
-    import argparse
+    ema_decay: float = field(default=0.999, metadata={"help": "initial ema decay rate"})
+    ema_end_decay: float = field(
+        default=0.9999, metadata={"help": "final ema decay rate"}
+    )
 
-    task_args = checkpoint['cfg']['task']
-    if isinstance(task_args, dict):
-        task_parser = argparse.ArgumentParser()
-        MaskedLMTask.add_args(task_parser)
-        # 'data' field in MLM task is REQUIRED, only provide a pseudo one here
-        task_args = argparse.Namespace(**{**vars(task_parser.parse_args(["PSEUDO_DATA"])), **task_args})
-    assert isinstance(task_args, argparse.Namespace)
-    # assign the real data path
-    task_args.data = _cfg.code_path
-    logger.info("task args:")
-    logger.info(task_args)
+    # when to finish annealing ema decay rate
+    ema_anneal_end_step: int = II("optimization.max_update")
 
-    model_args = checkpoint['cfg']['model']
-    if isinstance(model_args, dict):
-        model_parser = argparse.ArgumentParser()
-        RobertaModel.add_args(model_parser)
-        model_args = argparse.Namespace(**{**vars(model_parser.parse_args([])), **model_args})
-    assert isinstance(model_args, argparse.Namespace)
-    logger.info("model args")
-    logger.info(model_args)
+    ema_transformer_only: bool = field(
+        default=True,
+        metadata={"help": "whether to momentum update only the transformer"},
+    )
+    ema_layers_only: bool = field(
+        default=True,
+        metadata={"help": "whether to momentum update only the transformer layers"},
+    )
 
-    task = MaskedLMTask.setup_task(task_args)
-    model = RobertaModel.build_model(model_args, task)
-    model.load_state_dict(checkpoint['model'])
-    return model
+    max_update: int = II("optimization.max_update")
+
+    min_target_var: float = field(
+        default=0.1, metadata={"help": "stop training if target var falls below this"}
+    )
+    min_pred_var: float = field(
+        default=0.01,
+        metadata={"help": "stop training if prediction var falls below this"},
+    )
 
 
-def _load_cobert(_cfg: Data2VecAudioCodeConfig) -> HubertModel:
+def _load_cobert(_cfg: CobertWithTeacherConfig) -> HubertModel:
     # should not override args, we need to keep the teacher as it was.
     state = checkpoint_utils.load_checkpoint_to_cpu(_cfg.code_teacher_ckpt)
     w2v_args = state.get("cfg", None)
@@ -118,7 +144,7 @@ def _load_cobert(_cfg: Data2VecAudioCodeConfig) -> HubertModel:
     return model
 
 
-def _load_data2vec_audio(_cfg: Data2VecAudioCodeConfig) -> Data2VecAudioModel:
+def _load_data2vec_audio(_cfg: CobertWithTeacherConfig) -> Data2VecAudioModel:
     # This loads both data2vec_audio model and data2vec_audio_code model.
     state = checkpoint_utils.load_checkpoint_to_cpu(_cfg.code_teacher_ckpt)
     w2v_args = state.get("cfg", None)
@@ -154,7 +180,7 @@ def _load_data2vec_audio(_cfg: Data2VecAudioCodeConfig) -> Data2VecAudioModel:
     return model
 
 
-def _load_data2vec_code(_cfg: Data2VecAudioCodeConfig) -> Data2VecCodeModel:
+def _load_data2vec_code(_cfg: CobertWithTeacherConfig) -> Data2VecCodeModel:
     state = checkpoint_utils.load_checkpoint_to_cpu(_cfg.code_teacher_ckpt)
     w2v_args = state.get("cfg", None)
     if w2v_args is None:
@@ -178,7 +204,7 @@ def _load_data2vec_code(_cfg: Data2VecAudioCodeConfig) -> Data2VecCodeModel:
     model.remove_pretraining_modules()
     return model
 
-def _load_hubert(_cfg: Data2VecAudioCodeConfig) -> HubertModel:
+def _load_hubert(_cfg: CobertWithTeacherConfig) -> HubertModel:
     # do code input inference here.
     state = checkpoint_utils.load_checkpoint_to_cpu(_cfg.code_teacher_ckpt)
     w2v_args = state.get("cfg", None)
@@ -202,20 +228,77 @@ def _load_hubert(_cfg: Data2VecAudioCodeConfig) -> HubertModel:
     return model
 
 
-@register_model("data2vec_audio_code", dataclass=Data2VecAudioCodeConfig)
-class Data2VecAudioCodeModel(Data2VecAudioModel):
-    cfg: Data2VecAudioCodeConfig
+def get_annealed_rate(start, end, curr_step, total_steps):
+    r = end - start
+    pct_remaining = 1 - curr_step / total_steps
+    return end - r * pct_remaining
 
-    def __init__(self, cfg: Data2VecAudioCodeConfig):
-        super().__init__(cfg)
+
+@register_model("cobert_with_teacher", dataclass=CobertWithTeacherConfig)
+class CobertWithTeacherModel(BaseFairseqModel):
+    cfg: CobertWithTeacherConfig
+
+    def __init__(self, cfg: CobertWithTeacherConfig):
+        super().__init__()
+        # original data2vec_audio model
+        self.cfg = cfg
+
+        feature_enc_layers = eval(cfg.conv_feature_layers)
+        self.extractor_embed = feature_enc_layers[-1][0]
+
+        self.ema = None
+        self.embed = cfg.encoder_embed_dim
+
+        self.average_top_k_layers = cfg.average_top_k_layers
+        self.loss_beta = cfg.loss_beta
+        self.loss_scale = cfg.loss_scale
+
+        self.feature_extractor = ConvFeatureExtractionModel(
+            conv_layers=feature_enc_layers,
+            dropout=0.0,
+            mode=cfg.extractor_mode,
+            conv_bias=cfg.conv_bias,
+        )
+
+        self.post_extract_proj = nn.Linear(self.extractor_embed, cfg.encoder_embed_dim)
+
+        self.mask_prob = cfg.mask_prob
+        self.mask_selection = cfg.mask_selection
+        self.mask_other = cfg.mask_other
+        self.mask_length = cfg.mask_length
+        self.no_mask_overlap = cfg.no_mask_overlap
+        self.mask_min_space = cfg.mask_min_space
+
+        self.mask_channel_prob = cfg.mask_channel_prob
+        self.mask_channel_before = cfg.mask_channel_before
+        self.mask_channel_selection = cfg.mask_channel_selection
+        self.mask_channel_other = cfg.mask_channel_other
+        self.mask_channel_length = cfg.mask_channel_length
+        self.no_mask_channel_overlap = cfg.no_mask_channel_overlap
+        self.mask_channel_min_space = cfg.mask_channel_min_space
+
+        self.dropout_input = nn.Dropout(cfg.dropout_input)
+        self.dropout_features = nn.Dropout(cfg.dropout_features)
+
+        self.feature_grad_mult = cfg.feature_grad_mult
+
+        self.mask_emb = nn.Parameter(
+            torch.FloatTensor(cfg.encoder_embed_dim).uniform_()
+        )
+
+        self.encoder = TransformerEncoder(cfg)
+        self.layer_norm = LayerNorm(self.extractor_embed)
+
+        self.final_proj = nn.Linear(self.embed, self.embed)
+
+        self.num_updates = 0
+
         # load another teacher model
         self.code_teacher_model = None
         self.code_teacher_type = cfg.code_teacher_type
         if cfg.code_teacher_ckpt is not None and os.path.exists(cfg.code_teacher_ckpt):
             logger.info(f"Will load code teacher {self.code_teacher_type} from {cfg.code_teacher_ckpt}")
-            if self.code_teacher_type == "roberta":
-                self.code_teacher_model: RobertaModel = _load_roberta(cfg)
-            elif self.code_teacher_type == "cobert":
+            if self.code_teacher_type == "cobert":
                 self.code_teacher_model: HubertModel = _load_cobert(cfg)
             elif self.code_teacher_type == "data2vec_code":
                 self.code_teacher_model: Data2VecCodeModel = _load_data2vec_code(cfg)
@@ -238,6 +321,156 @@ class Data2VecAudioCodeModel(Data2VecAudioModel):
 
         self.code_loss_only = cfg.code_loss_only
         logger.info(f"code_loss_only={self.code_loss_only}")
+
+    def make_ema_teacher(self):
+        ema_config = EMAModuleConfig(
+            ema_decay=self.cfg.ema_decay,
+            ema_fp32=True,
+        )
+        skip_keys = set()
+        if self.cfg.ema_layers_only:
+            self.cfg.ema_transformer_only = True
+            for k, _ in self.encoder.pos_conv.named_parameters():
+                skip_keys.add(f"pos_conv.{k}")
+
+        self.ema = EMAModule(
+            self.encoder if self.cfg.ema_transformer_only else self,
+            ema_config,
+            skip_keys=skip_keys,
+        )
+
+    def set_num_updates(self, num_updates):
+        super().set_num_updates(num_updates)
+
+        if self.ema is None and self.final_proj is not None:
+            logger.info(f"making ema teacher")
+            self.make_ema_teacher()
+        elif self.training and self.ema is not None:
+            if self.cfg.ema_decay != self.cfg.ema_end_decay:
+                if num_updates >= self.cfg.ema_anneal_end_step:
+                    decay = self.cfg.ema_end_decay
+                else:
+                    decay = get_annealed_rate(
+                        self.cfg.ema_decay,
+                        self.cfg.ema_end_decay,
+                        num_updates,
+                        self.cfg.ema_anneal_end_step,
+                    )
+                self.ema.set_decay(decay)
+            if self.ema.get_decay() < 1:
+                self.ema.step(self.encoder if self.cfg.ema_transformer_only else self)
+
+        self.num_updates = num_updates
+
+    def state_dict(self, destination=None, prefix="", keep_vars=False):
+        state = super().state_dict(destination, prefix, keep_vars)
+
+        if self.ema is not None:
+            state[prefix + "_ema"] = self.ema.fp32_params
+
+        return state
+
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        if self.ema is not None:
+            k = prefix + "_ema"
+            assert k in state_dict
+            self.ema.restore(state_dict[k], True)
+            del state_dict[k]
+        return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+
+    @classmethod
+    def build_model(cls, cfg: CobertWithTeacherConfig, task=None):
+        """Build a new model instance."""
+
+        return cls(cfg)
+
+    def apply_mask(
+        self,
+        x,
+        padding_mask,
+        mask_indices=None,
+        mask_channel_indices=None,
+    ):
+        B, T, C = x.shape
+
+        if self.mask_channel_prob > 0 and self.mask_channel_before:
+            mask_channel_indices = compute_mask_indices(
+                (B, C),
+                None,
+                self.mask_channel_prob,
+                self.mask_channel_length,
+                self.mask_channel_selection,
+                self.mask_channel_other,
+                no_overlap=self.no_mask_channel_overlap,
+                min_space=self.mask_channel_min_space,
+            )
+            mask_channel_indices = (
+                torch.from_numpy(mask_channel_indices)
+                .to(x.device)
+                .unsqueeze(1)
+                .expand(-1, T, -1)
+            )
+            x[mask_channel_indices] = 0
+
+        if self.mask_prob > 0:
+            if mask_indices is None:
+                mask_indices = compute_mask_indices(
+                    (B, T),
+                    padding_mask,
+                    self.mask_prob,
+                    self.mask_length,
+                    self.mask_selection,
+                    self.mask_other,
+                    min_masks=1,
+                    no_overlap=self.no_mask_overlap,
+                    min_space=self.mask_min_space,
+                    require_same_masks=self.cfg.require_same_masks,
+                    mask_dropout=self.cfg.mask_dropout,
+                )
+                mask_indices = torch.from_numpy(mask_indices).to(x.device)
+            x = index_put(x, mask_indices, self.mask_emb)
+        else:
+            mask_indices = None
+
+        if self.mask_channel_prob > 0 and not self.mask_channel_before:
+            if mask_channel_indices is None:
+                mask_channel_indices = compute_mask_indices(
+                    (B, C),
+                    None,
+                    self.mask_channel_prob,
+                    self.mask_channel_length,
+                    self.mask_channel_selection,
+                    self.mask_channel_other,
+                    no_overlap=self.no_mask_channel_overlap,
+                    min_space=self.mask_channel_min_space,
+                )
+                mask_channel_indices = (
+                    torch.from_numpy(mask_channel_indices)
+                    .to(x.device)
+                    .unsqueeze(1)
+                    .expand(-1, T, -1)
+                )
+            x = index_put(x, mask_channel_indices, 0)
+
+        return x, mask_indices
+
+    def _get_feat_extract_output_lengths(self, input_lengths: torch.LongTensor):
+        """
+        Computes the output length of the convolutional layers
+        """
+
+        def _conv_out_length(input_length, kernel_size, stride):
+            return torch.floor((input_length - kernel_size) / stride + 1)
+
+        conv_cfg_list = eval(self.cfg.conv_feature_layers)
+
+        for i in range(len(conv_cfg_list)):
+            input_lengths = _conv_out_length(
+                input_lengths, conv_cfg_list[i][1], conv_cfg_list[i][2]
+            )
+
+        return input_lengths.to(torch.long)
+
 
     def forward(
             self,
@@ -356,8 +589,6 @@ class Data2VecAudioCodeModel(Data2VecAudioModel):
             # compute code teacher representation
             # T x B x C
             code_y = None
-            if self.code_teacher_type == "roberta":
-                code_y = self._get_roberta_feature(source_codes)
             if self.code_teacher_type == "cobert":
                 code_y, feat_padding_mask = self._get_cobert_feature(source_codes, orig_padding_mask)
                 assert len(code_y) == self.cfg.code_teacher_max_layer - self.cfg.code_teacher_min_layer
@@ -454,9 +685,6 @@ class Data2VecAudioCodeModel(Data2VecAudioModel):
             if self.multi_outputs:
                 result["pred_for_code_teacher_var"] = self.compute_var(x_for_code_teacher.float())
 
-        # if self.code_teacher_type == "cobert":
-        #     with torch.no_grad():
-        #         self._compute_cobert_acc(source_codes, origin_hubert_feature, feat_padding_mask, result)
 
         if not self.code_loss_only:
             if self.num_updates > 5000 and result["target_var"] < self.cfg.min_target_var:
@@ -538,16 +766,6 @@ class Data2VecAudioCodeModel(Data2VecAudioModel):
 
         return y
 
-    def _get_roberta_feature(self, source_codes):
-        # use .eval() every time!!!!!
-        self.code_teacher_model.eval()
-        _, inner_states = self.code_teacher_model.encoder.extract_features(
-            source_codes, return_all_hiddens=True)
-        inner_states = inner_states["inner_states"]
-        # inner_states from 1 to ignore word embedding
-        code_y = inner_states[1:][self.cfg.code_teacher_min_layer:self.cfg.code_teacher_max_layer]
-        return code_y
-
     def _get_cobert_feature(self, source_codes, padding_mask):
         # use .eval() every time!!!!!
         self.code_teacher_model: HubertModel
@@ -611,62 +829,26 @@ class Data2VecAudioCodeModel(Data2VecAudioModel):
             ).sum(dim=-1)
         return loss
 
-    def _compute_cobert_acc(self, target, encoder_out, padding_mask, logging_output):
-        def compute_pred(proj_x, target, label_embs):
-            # compute logits for the i-th label set
-            y = torch.index_select(label_embs, 0, target.long())
-            negs = label_embs.unsqueeze(1).expand(-1, proj_x.size(0), -1)
-            if self.code_teacher_model.target_glu:
-                y = self.code_teacher_model.target_glu(y)
-                negs = self.code_teacher_model.target_glu(negs)
-            # proj_x: (S, D)
-            # y: (S, D)
-            # negs: (Neg, S, D)
-            return self.code_teacher_model.compute_nce(proj_x, y, negs)
-
-        target_list = [target]
-        label_embs_list = \
-            self.code_teacher_model.label_embs_concat.split(self.code_teacher_model.num_classes, 0)
-
-        mask_indices = torch.full(size=encoder_out.size()[:2], fill_value=False)
-        nomask_indices = torch.logical_and(~padding_mask.cpu(), ~mask_indices)
-        encoder_out = encoder_out.to(self.code_teacher_model.final_proj.weight.dtype)
-        proj_x_u = self.code_teacher_model.final_proj(encoder_out[nomask_indices])
-        if self.code_teacher_model.untie_final_proj:
-            proj_x_u_list = proj_x_u.chunk(len(target_list), dim=-1)
-        else:
-            proj_x_u_list = [proj_x_u for _ in range(len(target_list))]
-
-        logit_u_list = [
-            compute_pred(proj_x_u, t[nomask_indices], label_embs_list[i])
-            for i, (proj_x_u, t) in enumerate(zip(proj_x_u_list, target_list))
-        ]
-        fake_net_output = {"logit_u_list": logit_u_list}
-        logp_u_list = self.code_teacher_model.get_logits(
-            net_output=fake_net_output,
-            is_masked=False
-        )
-
-        def compute_correct(logits):
-            if logits.numel() == 0:
-                return 0, 0
-            else:
-                assert logits.dim() > 1, logits.shape
-                max = logits.argmax(-1) == 0
-                min = logits.argmin(-1) == 0
-                both = max & min
-                corr = max.long().sum().item() - both.long().sum().item()
-                count = max.numel()
-                return corr, count
-
-        for i, logp_u in enumerate(logp_u_list):
-            corr_u, count_u = compute_correct(logp_u)
-            logging_output[f"correct_u_{i}"] = corr_u
-            logging_output[f"count_u_{i}"] = count_u
-
     @staticmethod
     def compute_mean(y):
         return y.mean()
+
+    @staticmethod
+    def compute_var(y):
+        y = y.view(-1, y.size(-1))
+        if dist.is_initialized():
+            zc = torch.tensor(y.size(0)).cuda()
+            zs = y.sum(dim=0)
+            zss = (y ** 2).sum(dim=0)
+
+            dist.all_reduce(zc)
+            dist.all_reduce(zs)
+            dist.all_reduce(zss)
+
+            var = zss / (zc - 1) - (zs ** 2) / (zc * (zc - 1))
+            return torch.sqrt(var + 1e-6).mean()
+        else:
+            return torch.sqrt(y.var(dim=0) + 1e-6).mean()
 
     def extract_features(
         self, source, padding_mask, mask=False, layer=None
@@ -681,7 +863,14 @@ class Data2VecAudioCodeModel(Data2VecAudioModel):
         return res
 
     def remove_pretraining_modules(self, last_layer=None):
-        super().remove_pretraining_modules(last_layer)
+        # original data2vec_audio removal
+        self.final_proj = None
+        self.ema = None
+        if last_layer is not None:
+            self.encoder.layers = nn.ModuleList(
+                l for i, l in enumerate(self.encoder.layers) if i <= last_layer
+            )
+        # code teacher removal
         self.code_teacher_model = None
         if self.multi_outputs:
             self.code_teacher_proj = None
