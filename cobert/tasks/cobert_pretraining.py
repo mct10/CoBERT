@@ -28,7 +28,7 @@ class LabelEncoder(object):
 
 
 @dataclass
-class CodeTeacher2PretrainingConfig(FairseqDataclass):
+class CobertPretrainingConfig(FairseqDataclass):
     data: str = field(
         default=MISSING,
         metadata={"help": "path to data directory."
@@ -96,14 +96,14 @@ class CodeTeacher2PretrainingConfig(FairseqDataclass):
     )
 
 
-@register_task("code_teacher_2_pretraining", dataclass=CodeTeacher2PretrainingConfig)
-class CodeTeacher2PretrainingTask(FairseqTask):
+@register_task("cobert_pretraining", dataclass=CobertPretrainingConfig)
+class CobertPretrainingTask(FairseqTask):
     """
     This task is responsible for code input tasks.
     If pre-training, then code is the input. No explicit output is provided.
     If fine-tuning, then code is the input, and ltr is the output.
     """
-    def __init__(self, cfg: CodeTeacher2PretrainingConfig, code_dict, ltr_dict=None):
+    def __init__(self, cfg: CobertPretrainingConfig, code_dict, ltr_dict=None):
         super().__init__(cfg)
         self.cfg = cfg
         self.fine_tuning = cfg.fine_tuning
@@ -113,11 +113,11 @@ class CodeTeacher2PretrainingTask(FairseqTask):
         self.letter_dictionary = ltr_dict
 
     @classmethod
-    def setup_task(cls, cfg: CodeTeacher2PretrainingConfig, **kwargs):
+    def setup_task(cls, cfg: CobertPretrainingConfig, **kwargs):
         """Setup the task (e.g., load dictionaries).
 
         Args:
-            cfg (CodeTeacher2PretrainingConfig): configuration of this task
+            cfg (CobertPretrainingConfig): configuration of this task
         """
         code_dict_path = os.path.join(cfg.data, f"dict.{cfg.label}.txt")
         if not os.path.exists(code_dict_path):

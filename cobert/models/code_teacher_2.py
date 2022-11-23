@@ -18,7 +18,7 @@ from fairseq.utils import index_put
 from omegaconf import II
 
 from .modules.code_encoder import TransformerEncoder
-from ..tasks.code_teacher_2_pretraining import CodeTeacher2PretrainingConfig
+from ..tasks.code_teacher_2_pretraining import CobertPretrainingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ def get_annealed_rate(start, end, curr_step, total_steps):
 
 @register_model("code_teacher_2", dataclass=CodeTeacher2Config)
 class CodeTeacher2(BaseFairseqModel):
-    def __init__(self, cfg: CodeTeacher2Config, task_cfg: CodeTeacher2PretrainingConfig, source_dict):
+    def __init__(self, cfg: CodeTeacher2Config, task_cfg: CobertPretrainingConfig, source_dict):
         super().__init__()
 
         self.cfg = cfg
@@ -230,7 +230,7 @@ class CodeTeacher2(BaseFairseqModel):
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     @classmethod
-    def build_model(cls, cfg: CodeTeacher2Config, task: CodeTeacher2PretrainingConfig):
+    def build_model(cls, cfg: CodeTeacher2Config, task: CobertPretrainingConfig):
         return cls(cfg, task.cfg, task.source_dictionary)
 
     def apply_mask(
