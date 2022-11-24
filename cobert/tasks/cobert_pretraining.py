@@ -9,7 +9,7 @@ from fairseq.data import Dictionary
 from fairseq.dataclass import FairseqDataclass
 from fairseq.tasks import register_task, FairseqTask
 
-from cobert.data.audio_code_dataset import AudioCodeDataset
+from cobert.data.cobert_dataset import CobertDataset
 
 
 logger = logging.getLogger(__name__)
@@ -153,7 +153,7 @@ class CobertPretrainingTask(FairseqTask):
             # the dataset only returns speech and code.
             # speech as the 'source', code as the 'source_codes'.
             # but only the code is expected to be used.
-            self.datasets[split] = AudioCodeDataset(
+            self.datasets[split] = CobertDataset(
                 audio_manifest,
                 sample_rate=self.cfg.sample_rate,
                 label_paths=[code_file],
@@ -181,7 +181,7 @@ class CobertPretrainingTask(FairseqTask):
             label_file = os.path.join(self.cfg.label_dir, f"{split}.{self.cfg.label_suffix}")
             # the dataset returns the code, and label.
             # code as the 'source', label as the 'target'
-            self.datasets[split] = AudioCodeDataset(
+            self.datasets[split] = CobertDataset(
                 audio_manifest,
                 sample_rate=self.cfg.sample_rate,
                 label_paths=[label_file],
