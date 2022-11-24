@@ -368,7 +368,7 @@ class CodeTeacher1(BaseFairseqModel):
     def build_model(cls, cfg: CodeTeacher1Config, task):
         """Build a new model instance."""
 
-        model = CodeTeacher1Config(cfg, task.cfg, task.dictionaries)
+        model = CodeTeacher1(cfg, task.cfg, task.dictionaries)
         return model
 
     def apply_mask(self, x, padding_mask, target_list):

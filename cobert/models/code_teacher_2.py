@@ -18,7 +18,7 @@ from fairseq.utils import index_put
 from omegaconf import II
 
 from .modules.code_encoder import TransformerEncoder
-from ..tasks.code_teacher_2_pretraining import CobertPretrainingConfig
+from ..tasks.cobert_pretraining import CobertPretrainingConfig
 
 logger = logging.getLogger(__name__)
 

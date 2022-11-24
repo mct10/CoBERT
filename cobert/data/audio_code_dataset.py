@@ -111,7 +111,6 @@ class AudioCodeDataset(FairseqDataset):
             label_rates: Union[List[float], float],  # -1 for sequence labels
             pad_list: List[str],
             eos_list: List[str],
-            fine_tuning: bool = False,
             label_processors: Optional[List[Any]] = None,
             max_keep_sample_size: Optional[int] = None,
             min_keep_sample_size: Optional[int] = None,
@@ -137,11 +136,8 @@ class AudioCodeDataset(FairseqDataset):
         self.num_labels = len(label_paths)
         self.pad_list = pad_list
         self.eos_list = eos_list
-        self.fine_tuning = fine_tuning
         self.label_processors = label_processors
         self.single_target = single_target
-        assert self.single_target, "Not supported multiple single target yet."
-
         self.label_rates = (
             [label_rates for _ in range(len(label_paths))]
             if isinstance(label_rates, float)
@@ -296,11 +292,7 @@ class AudioCodeDataset(FairseqDataset):
         if self.single_target:
             batch["target_lengths"] = lengths_list[0]
             batch["ntokens"] = ntokens_list[0]
-            if self.fine_tuning:
-                batch["target"] = targets_list[0]
-            else:
-                # when pre-training, use code as input not target
-                batch["net_input"]["source_codes"] = targets_list[0]
+            batch["target"] = targets_list[0]
         else:
             batch["target_lengths_list"] = lengths_list
             batch["ntokens_list"] = ntokens_list
