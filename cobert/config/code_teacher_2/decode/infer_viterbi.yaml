@@ -1,0 +1,34 @@
+# @package _group_
+
+defaults:
+  - model: null
+
+hydra:
+  run:
+    dir: ${common_eval.results_path}/viterbi
+  sweep:
+    dir: ${common_eval.results_path}
+    subdir: viterbi
+
+task:
+  _name: cobert_pretraining
+  data: ???
+  fine_tuning: true
+  label: km
+  code_rate: 50
+  label_dir: ???
+  label_suffix: ltr
+  label_rate: -1.0
+  normalize: true
+
+decoding:
+  type: viterbi
+  unique_wer_file: true
+common_eval:
+  results_path: ???
+  path: ???
+  post_process: letter
+  quiet: true
+dataset:
+  max_tokens: 1100000
+  gen_subset: ???
