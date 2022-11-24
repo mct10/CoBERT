@@ -1,0 +1,31 @@
+# @package _group_
+
+defaults:
+  - model: null
+
+hydra:
+  run:
+    dir: ${common_eval.results_path}/viterbi
+  sweep:
+    dir: ${common_eval.results_path}
+    subdir: viterbi
+
+task:
+  _name: code_teacher_1_pretraining
+  single_target: true
+  fine_tuning: true
+  data: ???
+  normalize: ???
+  random_crop: false
+  pad_audio: true
+
+decoding:
+  type: viterbi
+  unique_wer_file: true
+common_eval:
+  results_path: ???
+  path: ???
+  post_process: letter
+dataset:
+  max_tokens: 1100000
+  gen_subset: ???
