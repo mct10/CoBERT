@@ -22,14 +22,15 @@ distributed_training:
   find_unused_parameters: true
 
 task:
-  _name: hubert_pretraining
+  _name: code_teacher_1_pretraining
   data: ???
   label_dir: ???
-  labels: ???
+  labels: ["km"]
   label_rate: ${model.label_rate}
   sample_rate: 16000
   max_sample_size: 250000
   min_sample_size: 32000
+  single_target: false
   pad_audio: false
   random_crop: true
   normalize: false # must be consistent with extractor
@@ -63,7 +64,7 @@ lr_scheduler:
   warmup_updates: 32000
 
 model:
-  _name: hubert
+  _name: code_teacher_1
   label_rate: ???
   skip_masked: false
   skip_nomask: false
