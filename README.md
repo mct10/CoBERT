@@ -3,6 +3,7 @@
 ```
 git clone https://github.com/mct10/CoBERT.git
 cd CoBERT
+git submodule update --init fairseq
 pip install --editable fairseq/
 cd fairseq
 python setup.py build develop
