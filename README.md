@@ -43,6 +43,7 @@ fairseq-hydra-train -m \
     dataset.train_subset=train \
     model.code_teacher_ckpt=/path/to/teacher \
     model.code_teacher_type=code_teacher_2 \
+    +model.multi_outputs=true \
     common.user_dir=/users/cmeng9/CoBERT/cobert/
 ```
 
