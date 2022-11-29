@@ -9,6 +9,13 @@ CoBERT outperforms the most recent state-of-the-art performance on the ASR task 
 
 <img src="cobert/CoBERT_Structure.png" alt="se" width="1000" />
 
+## Pre-Trained Models
+Model | Pretraining Data | Model
+|---|---|---
+code teacher 1 | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to_be_added)
+code teacher 2 | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to_be_added)
+CoBERT | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to_be_added)
+
 ## Implementation
 ### Setup
 Please follow the instructions below to clone the code and install the python environment for CoBERT.
@@ -141,6 +148,7 @@ python cobert/infer.py \
   common.user_dir=/path/to/CoBERT/cobert/
 ```
 ## Citation
+If you find our work is useful in your research, please cite the following paper:
 ```bibtex
 @article{meng2022cobert,
   title   = {CoBERT: Self-Supervised Speech Representation Learning Through Code Representation Learning},
