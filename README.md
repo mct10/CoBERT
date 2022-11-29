@@ -16,6 +16,8 @@ code teacher 1 | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to
 code teacher 2 | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to_be_added)
 CoBERT | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to_be_added)
 
+## Extract features using pre-trained models
+
 ## Implementation
 ### Setup
 Please follow the instructions below to clone the code and install the python environment for CoBERT.
