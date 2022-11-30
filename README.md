@@ -17,7 +17,7 @@ code teacher 2 | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to
 CoBERT base | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to_be_added)
 
 ## Extract features using pre-trained models
-```
+```python
 import torch
 import torch.nn.functional as F
 from cobert.models.cobert_with_teacher import CobertWithTeacherConfig, CobertWithTeacherModel
