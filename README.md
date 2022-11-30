@@ -14,7 +14,7 @@ Model | Pretraining Data | Model
 |---|---|---
 code teacher 1 | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to_be_added)
 code teacher 2 | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to_be_added)
-CoBERT | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to_be_added)
+CoBERT base | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to_be_added)
 
 ## Extract features using pre-trained models
 
