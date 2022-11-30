@@ -17,7 +17,36 @@ code teacher 2 | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to
 CoBERT base | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to_be_added)
 
 ## Extract features using pre-trained models
+```
+import torch
+import torch.nn.functional as F
+from cobert.models.cobert_with_teacher import CobertWithTeacherConfig, CobertWithTeacherModel
 
+checkpoint = torch.load("path/to/checkpoint.pt")
+cfg = CobertWithTeacherConfig(**checkpoint["cfg"]["model"])
+model = CobertWithTeacherModel.build_model(cfg)
+
+# code teacher is useless in this case. remove them.
+model.code_teacher_model = None
+for k in list(checkpoint["model"].keys()):
+    if "code_teacher_model" in k:
+        del checkpoint["model"][k]
+
+# also delete ema
+del checkpoint["model"]["_ema"]
+model.load_state_dict(checkpoint["model"])
+model.eval()
+
+wav_input_16khz = torch.randn(1,10000)
+normalize = checkpoint["cfg"]["task"]["normalize"]  # True by default
+if normalize:
+    wav_input_16khz = F.layer_norm(wav_input_16khz[0], wav_input_16khz[0].shape).unsqueeze(0)
+
+# extract representations for each layer
+layer_results = model.extract_features(source=wav_input_16khz, padding_mask=None)["layer_results"]
+# T x B x C -> B x T x C
+layer_results = [l[2].transpose(0, 1) for l in layer_results]
+```
 ## Implementation
 ### Setup
 Please follow the instructions below to clone the code and install the python environment for CoBERT.
@@ -144,7 +173,7 @@ python cobert/infer.py \
   task.labels=ltr \
   decoding.type=viterbi \
   task.data=/path/to/manifest \
-  task.normalize=false \
+  task.normalize=true \
   common_eval.path=/path/to/ckpt \
   dataset.gen_subset=dev_other \
   common.user_dir=/path/to/CoBERT/cobert/
