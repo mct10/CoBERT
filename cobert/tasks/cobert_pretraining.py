@@ -132,7 +132,7 @@ class CobertPretrainingTask(FairseqTask):
             ltr_dict_path = os.path.join(cfg.label_dir, f"dict.{cfg.label_suffix}.txt")
             if not os.path.exists(ltr_dict_path):
                 ltr_dict = None
-                logger.warning(f"Cannot load dict from {code_dict_path}. Make sure it is the expected behavior.")
+                logger.warning(f"Cannot load dict from {ltr_dict_path}. Make sure it is the expected behavior.")
             else:
                 logger.info(f"Loaded dict from {ltr_dict_path}.")
                 ltr_dict = cls.load_dictionary(ltr_dict_path)
