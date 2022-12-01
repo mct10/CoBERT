@@ -12,9 +12,9 @@ CoBERT outperforms the most recent state-of-the-art performance on the ASR task 
 ## Pre-Trained Models
 Model | Pretraining Data | Model
 |---|---|---
-code teacher 1 | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to_be_added)
-code teacher 2 | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to_be_added)
-CoBERT base | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to_be_added)
+code teacher 1 | [Librispeech](http://www.openslr.org/12) 960 hr | [download](https://drive.google.com/file/d/1IwLJU7WWyFpjyeuFvl3P7KKbt-_C6Yzw/view?usp=sharing)
+code teacher 2 | [Librispeech](http://www.openslr.org/12) 960 hr | [download](https://drive.google.com/file/d/1bo0qBEIiuEQYObPe_0cVYnJES-vG59cX/view?usp=share_link)
+CoBERT base | [Librispeech](http://www.openslr.org/12) 960 hr | [download](https://drive.google.com/file/d/1omdxrzU14Q8K28tmcvvRABQMRvc7Uk2h/view?usp=share_link)
 
 ## Extract features using pre-trained models
 ```python
