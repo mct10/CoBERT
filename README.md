@@ -45,7 +45,7 @@ if normalize:
 # extract representations for each layer
 layer_results = model.extract_features(source=wav_input_16khz, padding_mask=None)["layer_results"]
 # T x B x C -> B x T x C
-layer_results = [l[2].transpose(0, 1) for l in layer_results]
+layer_results = [l[0].transpose(0, 1) for l in layer_results]
 ```
 ## Implementation
 ### Setup
