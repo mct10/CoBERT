@@ -97,6 +97,6 @@ model:
   mask_dropout: 0
 
   code_teacher_ckpt: ???
-  code_teacher_type: code_teacher_1
+  code_teacher_type: code_teacher_2
   code_teacher_min_layer: 4
   code_teacher_max_layer: 12
