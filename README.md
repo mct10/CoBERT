@@ -12,9 +12,9 @@ CoBERT outperforms the most recent state-of-the-art performance on the ASR task 
 ## Pre-Trained Models
 Model | Pretraining Data | Model
 |---|---|---
-code teacher 1 | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to_be_added)
-code teacher 2 | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to_be_added)
-CoBERT base | [Librispeech](http://www.openslr.org/12) 960 hr | [download](to_be_added)
+code teacher 1 | [Librispeech](http://www.openslr.org/12) 960 hr | [download](https://drive.google.com/file/d/1IwLJU7WWyFpjyeuFvl3P7KKbt-_C6Yzw/view?usp=sharing)
+code teacher 2 | [Librispeech](http://www.openslr.org/12) 960 hr | [download](https://drive.google.com/file/d/1bo0qBEIiuEQYObPe_0cVYnJES-vG59cX/view?usp=share_link)
+CoBERT base | [Librispeech](http://www.openslr.org/12) 960 hr | [download](https://drive.google.com/file/d/1omdxrzU14Q8K28tmcvvRABQMRvc7Uk2h/view?usp=share_link)
 
 ## Extract features using pre-trained models
 ```python
@@ -45,7 +45,7 @@ if normalize:
 # extract representations for each layer
 layer_results = model.extract_features(source=wav_input_16khz, padding_mask=None)["layer_results"]
 # T x B x C -> B x T x C
-layer_results = [l[2].transpose(0, 1) for l in layer_results]
+layer_results = [l[0].transpose(0, 1) for l in layer_results]
 ```
 ## Implementation
 ### Setup
