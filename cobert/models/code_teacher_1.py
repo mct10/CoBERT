@@ -1,7 +1,7 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
-#
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
+# Copyright 2022 ByteDance Inc.
+# CoBERT: Self-Supervised Speech Representation Learning Through Code Representation Learning (https://arxiv.org/abs/2210.04062)
+# Licensed under The MIT License [see LICENSE for details]
+# Based on fairseq (https://github.com/facebookresearch/fairseq)
 
 import logging
 import math

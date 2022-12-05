@@ -1,3 +1,8 @@
+# Copyright 2022 ByteDance Inc.
+# CoBERT: Self-Supervised Speech Representation Learning Through Code Representation Learning (https://arxiv.org/abs/2210.04062)
+# Licensed under The MIT License [see LICENSE for details]
+# Based on fairseq (https://github.com/facebookresearch/fairseq)
+
 import logging
 from typing import List, Union, Optional, Any
 
