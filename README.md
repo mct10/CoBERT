@@ -1,7 +1,4 @@
 # CoBERT
-
-> [**CoBERT: Self-Supervised Speech Representation Learning Through Code Representation Learning**](https://arxiv.org/abs/2210.04062)
-
 ## Introduction
 **Co**de **BERT** (CoBERT) is an approach for self-supervised speech representation learning.
 The idea is to convert an utterance to a sequence of discrete codes, and perform code representation learning.
@@ -51,7 +48,6 @@ layer_results = [l[0].transpose(0, 1) for l in layer_results]
 ### Setup
 Please follow the instructions below to clone the code and install the python environment for CoBERT.
 ```
-git clone https://github.com/mct10/CoBERT.git
 cd CoBERT
 git submodule update --init fairseq
 pip install --editable fairseq/
@@ -177,16 +173,4 @@ python cobert/infer.py \
   common_eval.path=/path/to/ckpt \
   dataset.gen_subset=dev_other \
   common.user_dir=/path/to/CoBERT/cobert/
-```
-## Citation
-If you find our work is useful in your research, please cite the following paper:
-```bibtex
-@article{meng2022cobert,
-  title   = {CoBERT: Self-Supervised Speech Representation Learning Through Code Representation Learning},
-  author  = {Meng, Chutong and Ao, Junyi and Ko, Tom and Wang, Mingxuan and Li, Haizhou},
-  eprint={2210.04062},
-  archivePrefix={arXiv},
-  primaryClass={cs.SD},
-  year={2022}
-}
 ```
