@@ -141,18 +141,6 @@ python cobert/infer.py \
 ### CoBERT
 - Pre-training
 ```
-fairseq-hydra-train \
-    --config-dir fairseq/examples/wav2vec/config/finetuning \
-    --config-name base_100h \
-    task.data=/path/to/manifest \
-    model.w2v_path=/path/to/ckpt \
-    +model.normalize=true \
-    dataset.train_subset=train_100h \
-    dataset.valid_subset=dev_other \
-    common.user_dir=/path/to/CoBERT/cobert/
-```
-- Fine-tuning
-```
 fairseq-hydra-train -m \
     --config-dir cobert/config/cobert/pretraining \
     --config-name base_librispeech \
@@ -162,7 +150,19 @@ fairseq-hydra-train -m \
     model.code_teacher_ckpt=/path/to/teacher \
     model.code_teacher_type=code_teacher_2 \
     +model.multi_outputs=true \
-    common.user_dir=/users/cmeng9/CoBERT/cobert/
+    common.user_dir=/path/to/CoBERT/cobert/
+```
+- Fine-tuning
+```
+fairseq-hydra-train \
+    --config-dir fairseq/examples/wav2vec/config/finetuning \
+    --config-name base_100h \
+    task.data=/path/to/manifest \
+    model.w2v_path=/path/to/ckpt \
+    +model.normalize=true \
+    dataset.train_subset=train_100h \
+    dataset.valid_subset=dev_other \
+    common.user_dir=/path/to/CoBERT/cobert/
 ```
 - Inference
 ```
